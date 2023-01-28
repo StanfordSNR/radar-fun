@@ -8,65 +8,86 @@
 #include <boost/thread.hpp>
 #include <iostream>
 
-
+// UHD_SAFE_MAIN is a catch-all wrapper of main. Why in this syntax??
 int UHD_SAFE_MAIN(int argc, char *argv[]) {
 	uhd::set_thread_priority_safe();
+		// Sets "scheduling priority" ??
+		// Documentation says this is identical to "set_thread_priority" 
+		// but doesn't throw in case of failure
+	
 
-	std::string device_args("addr=192.168.40.2");
-    	std::string subdev("A:0");
-    	std::string ant("RX2");
-    	std::string ref("internal");
+	std::string device_args("addr=192.168.40.2"); 
+	uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make(device_args);
+	std::cout << std::endl;
+    std::cout << boost::format("Made Multi USRP with IP: %s...") % device_args << std::endl;
+		// Set IP address of USRP in format required to "make device"
+		// Can find this from uhd_find_devices in terminal
 
-    	double rate(1e6);
-    	double freq(915e6);
-    	double gain(10);
-	double bw(1e6);
 
-	//create a usrp device
-    	std::cout << std::endl;
-    	std::cout << boost::format("Creating the usrp device with: %s...") % device_args << std::endl;
-    	uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make(device_args);
+	std::string ref("internal");
+	std::cout << boost::format("Source of motherboard clock: %f...") % ref << std::endl;
+    usrp->set_clock_source(ref);
+		// This sets the source for a reference clock that is default 10 MHz.
+		// Can be set to "internal", "external", and multiple-in-multiple-out "MIMO".
+	
+	// Intereresting documentation about the clock: In the x310, the Digital
+	// Down-Converter and Up-Converter (used in DAC and ADC) run on the same
+	// clock as the "header passing packets." This allows timed commands to 
+	// be executed with extreme precision. However, this also limits the
+	// amount of commands that can be stored in the command queue. If the
+	// device is not streaming the data simultaneously, adding commands can 
+	// shut down the device. Managing the DDC and DUC queue will be vital to
+	// continuous receiving and transmitting of signals.
 
-    // Lock mboard clocks
-    	std::cout << boost::format("Lock mboard clocks: %f") % ref << std::endl;
-    	usrp->set_clock_source(ref);
-    
-    //always select the subdevice first, the channel mapping affects the other settings
-    	std::cout << boost::format("subdev set to: %f") % subdev << std::endl;
-    	usrp->set_rx_subdev_spec(subdev);
-    	std::cout << boost::format("Using Device: %s") % usrp->get_pp_string() << std::endl;
 
-    //set the sample rate
-    	if (rate <= 0.0) {
-        	std::cerr << "Please specify a valid sample rate" << std::endl;
-        	return ~0;
-    	}
+	std::string subdev("A:0");
+	usrp->set_rx_subdev_spec(subdev);
+	std::cout << boost::format("Using Device: %s") % usrp->get_pp_string() << std::endl;
+		// Format for setting the sub-device: the daughterboard inside of the radio
+		// which communicates with the antenna. The format is 
+			// <motherboard slot>:<daughterboard name>
+		// Here, we are using the RF A motherboard slot (where the antennas are plugged
+		// in) and setting the daughterboard frontend name to 0. You can check possible
+		// daughterboard frontend names for specific boards by probing device configuration
+		// with uhd_usrp_probe. The last line prints the device configuration.
 
-    // set sample rate
-    	std::cout << boost::format("Setting RX Rate: %f Msps...") % (rate / 1e6) << std::endl;
-    	usrp->set_rx_rate(rate);
-    	std::cout << boost::format("Actual RX Rate: %f Msps...") % (usrp->get_rx_rate() / 1e6) << std::endl << std::endl;
 
-    // set freq
-    	std::cout << boost::format("Setting RX Freq: %f MHz...") % (freq / 1e6) << std::endl;
-    	uhd::tune_request_t tune_request(freq);
-    	usrp->set_rx_freq(tune_request);
-    	std::cout << boost::format("Actual RX Freq: %f MHz...") % (usrp->get_rx_freq() / 1e6) << std::endl << std::endl;
+	double rate(1e6); // The Rx sampling rate in Samples/second.
+	if (rate <= 0.0) {
+        std::cerr << "Please specify a valid sample rate" << std::endl;
+        return ~0;
+		// Ensures a positive sampling rate is selected.
+    }
+	usrp->set_rx_rate(rate);
+	std::cout << boost::format("Set Rx rate to: %f MS/s...") % (rate / 1e6) << std::endl;
+	std::cout << boost::format("measured Rx rate: %f MS/s...") % (usrp->get_rx_rate() / 1e6) << std::endl << std::endl;
+		// Sets the frequency that the received signal is sampled/stored at.
+		// Allows this to be checked with the true sampling rate.
+	
+	
+	double freq(915e6); // The Rx center frequency in Samples/second.
+	uhd::tune_request_t tune_request(freq); // Tells daughterboard to tune to specific center freq.
+    usrp->set_rx_freq(tune_request);
+	std::cout << boost::format("Set Rx center freq to: %f MHz...") % (freq / 1e6) << std::endl;
+	std::cout << boost::format("Measured Rx center freq: %f MHz...") % (usrp->get_rx_freq() / 1e6) << std::endl << std::endl;
+	
 
-    // set the rf gain
-    	std::cout << boost::format("Setting RX Gain: %f dB...") % gain << std::endl;
-    	usrp->set_rx_gain(gain);
-    	std::cout << boost::format("Actual RX Gain: %f dB...") % usrp->get_rx_gain() << std::endl << std::endl;
+	double gain(10); // Gain in dB for RF signal.
+	usrp->set_rx_gain(gain);
+	std::cout << boost::format("Set Rx Gain to: %f dB...") % gain << std::endl;
+	std::cout << boost::format("Measured Rx Gain to: %f dB...") % usrp->get_rx_gain() << std::endl << std::endl;
 
-    	// set the IF filter bandwidth
-    	std::cout << boost::format("Setting RX Bandwidth: %f MHz...") % (bw / 1e6) << std::endl;
-    	usrp->set_rx_bandwidth(bw);
-    	std::cout << boost::format("Actual RX Bandwidth: %f MHz...") % (usrp->get_rx_bandwidth() / 1e6) << std::endl << std::endl;
+	
+	double bw(1e6); // Frontend bandwidth for IF signal. 
+	usrp->set_rx_bandwidth(bw);
+	std::cout << boost::format("Set Rx bandwidth to: %f MHz...") % (bw / 1e6) << std::endl;
+	std::cout << boost::format("Measured Rx bandwidth: %f MHz...") % (usrp->get_rx_bandwidth() / 1e6) << std::endl << std::endl;
 
-    	// set the antenna
-    	std::cout << boost::format("Setting RX Antenna: %s") % ant << std::endl;
-    	usrp->set_rx_antenna(ant);
-    	std::cout << boost::format("Actual RX Antenna: %s") % usrp->get_rx_antenna() << std::endl << std::endl;
+
+	std::string ant("RX2"); // The two antennae on A are "TX/RX" and "RX2"
+	usrp->set_rx_antenna(ant);
+	std::cout << boost::format("Set Rx antenna to: %s") % ant << std::endl;
+	std::cout << boost::format("Detected Rx antenna: %s") % usrp->get_rx_antenna() << std::endl << std::endl;
 
 
 	return EXIT_SUCCESS;
