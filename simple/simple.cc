@@ -3,9 +3,11 @@
 #include <uhd/usrp/multi_usrp.hpp>
 #include <uhd/exception.hpp>
 #include <uhd/types/tune_request.hpp>
+#include <boost/algorithm/string.hpp>
 #include <boost/program_options.hpp>
 #include <boost/format.hpp>
 #include <boost/thread.hpp>
+#include <complex>
 #include <iostream>
 
 // UHD_SAFE_MAIN is a catch-all wrapper of main. Why in this syntax??
@@ -19,14 +21,14 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 	std::string device_args("addr=192.168.40.2"); 
 	uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make(device_args);
 	std::cout << std::endl;
-    std::cout << boost::format("Made Multi USRP with IP: %s...") % device_args << std::endl;
+    	std::cout << boost::format("Made Multi USRP with IP: %s...") % device_args << std::endl;
 		// Set IP address of USRP in format required to "make device"
 		// Can find this from uhd_find_devices in terminal
 
 
 	std::string ref("internal");
 	std::cout << boost::format("Source of motherboard clock: %f...") % ref << std::endl;
-    usrp->set_clock_source(ref);
+    	usrp->set_clock_source(ref);
 		// This sets the source for a reference clock that is default 10 MHz.
 		// Can be set to "internal", "external", and multiple-in-multiple-out "MIMO".
 	
@@ -54,10 +56,10 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 
 	double rate(1e6); // The Rx sampling rate in Samples/second.
 	if (rate <= 0.0) {
-        std::cerr << "Please specify a valid sample rate" << std::endl;
-        return ~0;
+        	std::cerr << "Please specify a valid sample rate" << std::endl;
+        	return ~0;
 		// Ensures a positive sampling rate is selected.
-    }
+    	}
 	usrp->set_rx_rate(rate);
 	std::cout << boost::format("Set Rx rate to: %f MS/s...") % (rate / 1e6) << std::endl;
 	std::cout << boost::format("measured Rx rate: %f MS/s...") % (usrp->get_rx_rate() / 1e6) << std::endl << std::endl;
@@ -67,7 +69,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 	
 	double freq(915e6); // The Rx center frequency in Samples/second.
 	uhd::tune_request_t tune_request(freq); // Tells daughterboard to tune to specific center freq.
-    usrp->set_rx_freq(tune_request);
+    	usrp->set_rx_freq(tune_request);
 	std::cout << boost::format("Set Rx center freq to: %f MHz...") % (freq / 1e6) << std::endl;
 	std::cout << boost::format("Measured Rx center freq: %f MHz...") % (usrp->get_rx_freq() / 1e6) << std::endl << std::endl;
 	
@@ -88,6 +90,106 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 	usrp->set_rx_antenna(ant);
 	std::cout << boost::format("Set Rx antenna to: %s") % ant << std::endl;
 	std::cout << boost::format("Detected Rx antenna: %s") % usrp->get_rx_antenna() << std::endl << std::endl;
+
+
+	std::cout << boost::format("Setting device timestamp to 0...") << std::endl;
+	usrp->set_time_now(uhd::time_spec_t(0.0));
+		// Synchronizes time of clock to 0.0 to allow for simultaneous 
+		// commands based on same clock time.
+
+
+	uhd::stream_args_t stream_args("fc32", "sc16");
+		// Creates the "stream_args" object
+		// Initializes to record data as 32 bit complex float
+		// Initializes to pass data as 16 bit complex integer.
+	stream_args.channels={0};
+		// Lets you stream data over different channels. This allows for 
+		// multiple channels to be streamed simultaneously. Here, the number
+		// (0) indicates that we are sending data from the first subdev spec,
+		// in this case "A:0". The order which these channels are received
+		// by the computer are determined by the order of numbers in the set.
+		// I.e. {1,0} would send data from B:0 to the application's first 
+		// channel, and data from A:0 to the application's second channel.
+	uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream(stream_args);
+		// Creates a new "receive stream" from the arguments in "stream_args".
+		// This stream must be destroyed before calling get_rx_stream again.
+	std::cout << std::endl;
+
+
+	double seconds_in_future(1.5); // How many seconds past time_spec_t to receive.
+	size_t total_num_samps(10000); // Total number of samples to receive.
+		// It is unclear from documentation why this is set up independently
+		// from the Rx Sampling Rate. Shouldn't the number of samples received
+		// be determined by the time sampled and the sampling rate?
+	std::cout << boost::format("Streaming %u samples, for %f seconds...") % total_num_samps % seconds_in_future << std::endl;
+	uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_NUM_SAMPS_AND_DONE);
+		// Creates "command structure" to control streaming.
+		// STREAM_MODE_START_CONTINUOUS   = start streaming continuously.
+		// STREAM_MODE_STOP_CONTINUOUS 	  = stop continuous streaming.
+		// STREAM_MODE_NUM_SAMPS_AND_DONE = stream exact number of samples.
+		// STREAM_MODE_NUM_SAMPS_AND_MORE = stream exact # of samples and expect future command for contiguous samples.
+	stream_cmd.num_samps = total_num_samps;
+	stream_cmd.stream_now = false;
+	stream_cmd.time_spec = uhd::time_spec_t(seconds_in_future);
+		// The time for streaming into the future is clocked in reference to 0.0 set earlier.
+	rx_stream->issue_stream_cmd(stream_cmd);
+		// Issues streaming commands to the designed rx_stream from earlier.
+
+
+	uhd::rx_metadata_t md;
+		// Configures object to store metadata describing IF data.
+		// Includes time specification, fragmentation flags, burst flags, error codes.
+
+
+	std::vector<std::complex<float>> buff(rx_stream->get_max_num_samps());
+		// Gets the maximum number of samples per buffer per packet.
+	std::vector<void*> buffs;
+		// A little unsure what is happening here. This is setup in the case
+		// that multiple channels are being used. (Just one is being used 
+		// here.) "buffs" is pointer of writable memory to fill with samples.
+		// The loop makes it so all channels are stored on the same buffer.
+		// I think this can (and should be) changed in the case of threading,
+		// since "recv" can't be threaded unless it is passing channels
+		// individually. 
+	for (size_t ch = 0; ch < rx_stream->get_num_channels(); ch++)
+		buffs.push_back(&buff.front());
+
+
+	double timeout = seconds_in_future + 0.1;
+		// This will control the initial timeout before receiving the first
+		// packet. We give 0.1 seconds of padding time for each packet.
+		// But we can't start receiving packets until the device has finished
+		// receiving.
+	size_t num_acc_samps = 0;
+	while (num_acc_samps < total_num_samps) {
+		size_t num_rx_samps = rx_stream->recv(buffs, buff.size(), md, timeout, true);
+			// Receives a single packet. The recv function passes data
+			// to the buffer buffs of a size "buff.size" as indicated by
+			// the metadata object. It then outputs the total number of
+			// samples that were passed in the packet.
+
+		timeout = 0.1; // After first packet, we can set the timeout to 0.1 again.
+		
+		if (md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT)
+            		break;
+        	
+		if (md.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE) {
+            		throw std::runtime_error(
+                		str(boost::format("Receiver error %s") % md.strerror()));
+        	}
+			// This is how the documentation says to handle errors.
+		
+		num_acc_samps += num_rx_samps; 
+			// Keeps track of how many total samples have been accumulated.
+	}
+
+
+	if (num_acc_samps < total_num_samps)
+        	std::cerr << "Receive timeout before all samples received..." << std::endl;
+			// Prints this message if timeout happened at some point before
+			// all packets were sent.
+
+	std::cout << std::endl << "Done!" << std::endl << std::endl;
 
 
 	return EXIT_SUCCESS;
