@@ -12,13 +12,17 @@
 #include <fstream>
 #include <typeinfo>
 #include <chrono>
+#include <csignal>
 
+// Handles Ctrl+C by changing variable.
 static bool stop_signal_called = false;
 void sig_int_handler(int)
 {
     stop_signal_called = true;
+	std::cout << ": Ctrl+C handled. Stopping continuous stream." << std::endl;
 }
 
+/*
 void vector_fill(std::vector<std::complex<float>>& big, \
     std::vector<std::complex<float>> small, \
     int B, int S, int start_index) {
@@ -32,6 +36,8 @@ void vector_fill(std::vector<std::complex<float>>& big, \
             }
         }
 }
+*/
+// For writing into vector of fixed length (determind by period of transmit)
 
 // UHD_SAFE_MAIN is a catch-all wrapper of main. Why in this syntax??
 int UHD_SAFE_MAIN(int argc, char *argv[]) {
@@ -40,6 +46,8 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 		// Documentation says this is identical to "set_thread_priority" 
 		// but doesn't throw in case of failure
 	
+	std::signal(SIGINT, &sig_int_handler);
+	// Sends Ctrl+C to signal handler.
 
 
 	std::string device_args("addr=192.168.40.2"); 
@@ -139,9 +147,9 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 		// This stream must be destroyed before calling get_rx_stream again.
 	std::cout << std::endl;
 
-
-	double seconds_in_future(1.5); // How many seconds to wait before receiving.
-	size_t total_num_samps(10001); // Total number of samples to receive.
+	// Total # of samples not needed for continuous streaming.
+	double seconds_in_future(5.0); // How many seconds to wait before receiving.
+	// size_t total_num_samps(10001); // Total number of samples to receive.
 		// It is unclear from documentation why this is set up independently
 		// from the Rx Sampling Rate. Shouldn't the number of samples received
 		// be determined by the time sampled and the sampling rate?
@@ -186,23 +194,31 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 
 	size_t num_acc_samps = 0;
 	
-	const auto start_time = std::chrono::steady_clock::now();
-	const auto last_update = start_time;
+	
 
-	const int SPP(rx_stream->get_max_num_samps());
-	const int input_period(10);
+	// const int SPP(rx_stream->get_max_num_samps());
+	
+	// Code for printing to fixed-length vector
+	/* const int input_period(10);
 	std::vector<std::complex<float>> data(input_period*rate);
     std::fill(data.begin(), data.end(), std::complex<double>(0.0,0.0));
-	int mod_start(0);
+	int mod_start(0); */
+
 	int ct(0);
 
 /*	std::vector<std::complex<float>> blank(SPP);
 	for (int i = 0; i < SPP; ++i) {
 		blank[i]=std::complex<double>(1.0*i,1.0*i);
 	}
-	std::cout << blank; */
+	std::cout << blank;
+*/
 	std::ofstream file;
-	
+	file.open("samples.csv");
+	file.close();
+	// Initializes file, flushes existing data.
+
+	const auto start_time = std::chrono::steady_clock::now();
+	auto last_update = start_time;
 
 	//while (num_acc_samps < total_num_samps) {
 	while (not stop_signal_called) {
@@ -212,7 +228,7 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 			// to the buffer buffs of a size "buff.size" as indicated by
 			// the metadata object. It then outputs the total number of
 			// samples that were passed in the packet.
-
+		const auto now = std::chrono::steady_clock::now();
 		
 
 		timeout = 0.1; // After first packet, we can set the timeout to 0.1 again.
@@ -229,18 +245,8 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 		num_acc_samps += num_rx_samps; 
 			// Keeps track of how many total samples have been accumulated.
 		
-
-
-		const auto now = std::chrono::steady_clock::now();
-		const auto diff = std::chrono::duration<double>(now - last_update).count();
-
-		
-		/*if (ct==2) {
-			for (auto &sample:buff) {
-				std::cout << sample.real() << std::endl;
-			}
-		}*/
-		
+		// For printing to fixed-length vector.		
+		/*
 		vector_fill(data, buff, input_period*rate, SPP, mod_start);
 		mod_start += SPP;
 		if (mod_start + SPP > input_period*rate-1) {
@@ -251,17 +257,29 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 				file << sample.real() << "," << sample.imag() << "\n";
 			}
 			file.close();
-		}
+		}*/
 		
-/*		file.open("samples.csv", std::ios_base::app);
+		file.open("samples.csv", std::ios_base::app);
 		for (auto &sample:buff) {
 			file << sample.real() << "," << sample.imag() << "\n";
 		}
-		file.close();*/
+		file.close();
+		// Appends file to add new data every packet. Only adding 1996 elements is fast.
+		// It's necessary to include opening/closing the file in the loop.
+		// Otherwise Ctrl+C will end streaming but won't properly close the file.
+		// Is there a way to make pressing a certain key trigger the "STOP_STREAMING" command?
 
 		ct+=1;
-		std::cout << boost::format("Packet # %u has %u samples at time t = %d.") % ct % num_rx_samps % diff << std::endl;
+		
+		auto diff = std::chrono::duration<double>(now - last_update).count();
+		auto tot = std::chrono::duration<double>(now - start_time).count();
+		last_update = now;
+		std::cout << boost::format("Packet #%u got +%u samples at t=%d s over dt=%d ms. Total: %u MS.") % ct % num_rx_samps % (tot - seconds_in_future) % (1000*diff) % (num_acc_samps / 1.0e6) << std::endl;
 	}
+
+
+	// When the while loop ends, we stop continuous streaming.
+	stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
 	
 
 	// if (num_acc_samps < total_num_samps)
@@ -270,10 +288,6 @@ int UHD_SAFE_MAIN(int argc, char *argv[]) {
 			// all packets were sent.
 
 	std::cout << std::endl << "Done!" << std::endl << std::endl;
-
-	
-	
-	
 
 	return EXIT_SUCCESS;
 }
