@@ -78,7 +78,6 @@ int main(int argc, char *argv[]) {
 
 	while (not stop_signal_called) {
 		size_t num_rx_samps = rx_stream->recv(buffs, buff.size(), md, timeout, true);
-		const auto now = std::chrono::steady_clock::now();
 		
 		timeout = 0.1;
 		
@@ -98,6 +97,7 @@ int main(int argc, char *argv[]) {
 	}
 
 	stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
+	rx_stream->issue_stream_cmd(stream_cmd);
 	file.close();
 
 	std::cout << std::endl << "Done!" << std::endl << std::endl;
