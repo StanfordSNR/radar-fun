@@ -2,89 +2,60 @@
 #include <csignal>
 #include <fstream>
 #include <iostream>
+#include <string>
 #include <uhd/exception.hpp>
 #include <uhd/types/tune_request.hpp>
 #include <uhd/usrp/multi_usrp.hpp>
 #include <uhd/utils/safe_main.hpp>
 #include <uhd/utils/thread.hpp>
 
+using namespace std;
+
 static bool stop_signal_called = false;
 void sig_int_handler( int )
 {
   stop_signal_called = true; // Handles Ctrl+C by changing variable.
-  std::cout << std::endl << "Streaming stopped." << std::endl;
 }
 
-int main( int argc, char* argv[] )
+int main()
 {
-  std::signal( SIGINT, &sig_int_handler ); // Sends Ctrl+C to signal handler.
+  signal( SIGINT, &sig_int_handler ); // Sends Ctrl+C to signal handler.
 
-  std::string device_args( "addr=192.168.40.2" );
-  uhd::usrp::multi_usrp::sptr usrp = uhd::usrp::multi_usrp::make( device_args );
+  auto usrp = uhd::usrp::multi_usrp::make( "addr=192.168.40.2" );
 
-  std::string ref( "internal" );
-  usrp->set_clock_source( ref );
+  usrp->set_clock_source( "internal" );
+  usrp->set_rx_subdev_spec( "A:0"s ); // select daughterboard
+  usrp->set_rx_rate( 1e6 );           // samples per second
+  usrp->set_rx_freq( 1e5 );           // center frequency
+  usrp->set_rx_gain( 10 );            // gain in dB
+  usrp->set_rx_bandwidth( 5e4 );      // bandwidth in Hz
+  usrp->set_rx_antenna( "RX2" );      // the two antennas on A are "TX/RX" and "RX2"
+  usrp->set_time_now( 0.0 );          // align internal clock
 
-  std::string subdev( "A:0" );
-  usrp->set_rx_subdev_spec( subdev );
-
-  double rate( 1e6 );
-  if ( rate <= 0.0 ) {
-    std::cerr << "Please specify a valid sample rate." << std::endl;
-    return ~0;
-  }
-  usrp->set_rx_rate( rate );
-
-  double freq( 1e5 ); // Sets center frequency to tune daughterboard.
-  uhd::tune_request_t tune_request( freq );
-  usrp->set_rx_freq( tune_request );
-
-  double gain( 10 ); // Sets gain in dB.
-  usrp->set_rx_gain( gain );
-
-  double bw( 5e4 ); // Sets bandwidth.
-  usrp->set_rx_bandwidth( bw );
-
-  std::string ant( "RX2" ); // The two antennae on A are "TX/RX" and "RX2"
-  usrp->set_rx_antenna( ant );
-
-  usrp->set_time_now( uhd::time_spec_t( 0.0 ) );
-
-  uhd::stream_args_t stream_args( "fc32", "sc16" );
+  // create receive stream
+  uhd::stream_args_t stream_args { "fc32", "sc16" };
   stream_args.channels = { 0 };
-  uhd::rx_streamer::sptr rx_stream = usrp->get_rx_stream( stream_args );
+  auto rx_stream = usrp->get_rx_stream( stream_args );
 
-  double seconds_in_future( 1.5 ); // How many seconds to wait before receiving.
+  // start streaming
+  rx_stream->issue_stream_cmd( uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS );
 
-  uhd::stream_cmd_t stream_cmd( uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS );
-  stream_cmd.stream_now = false;
-  stream_cmd.time_spec = uhd::time_spec_t( seconds_in_future );
-  rx_stream->issue_stream_cmd( stream_cmd );
+  uhd::rx_metadata_t metadata;
+  vector<complex<float>> buff( rx_stream->get_max_num_samps() );
+  vector<void*> buffs { buff.data() };
 
-  uhd::rx_metadata_t md;
-  std::vector<std::complex<float>> buff( rx_stream->get_max_num_samps() );
-  std::vector<void*> buffs;
-  for ( size_t ch = 0; ch < rx_stream->get_num_channels(); ch++ )
-    buffs.push_back( &buff.front() );
+  size_t num_acc_samps = 0; // total number of accumulated samples
 
-  double timeout = seconds_in_future + 0.1;
-  size_t num_acc_samps = 0;
-
-  std::ofstream file;
+  ofstream file;
   file.open( "samples.csv" );
 
-  std::cout << "Streaming..." << std::endl;
+  cout << "Streaming..." << endl;
 
   while ( not stop_signal_called ) {
-    size_t num_rx_samps = rx_stream->recv( buffs, buff.size(), md, timeout, true );
+    size_t num_rx_samps = rx_stream->recv( buffs, buff.size(), metadata, 5, true );
 
-    timeout = 0.1;
-
-    if ( md.error_code == uhd::rx_metadata_t::ERROR_CODE_TIMEOUT )
-      break;
-
-    if ( md.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE ) {
-      throw std::runtime_error( md.strerror() );
+    if ( metadata.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE ) {
+      throw runtime_error( metadata.strerror() );
     }
 
     num_acc_samps += num_rx_samps;
@@ -94,11 +65,10 @@ int main( int argc, char* argv[] )
     }
   }
 
-  stream_cmd.stream_mode = uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS;
-  rx_stream->issue_stream_cmd( stream_cmd );
+  rx_stream->issue_stream_cmd( uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS );
   file.close();
 
-  std::cout << std::endl << "Done!" << std::endl << std::endl;
+  cout << "Done!\n";
 
   return EXIT_SUCCESS;
 }
