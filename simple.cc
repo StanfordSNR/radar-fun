@@ -45,6 +45,7 @@ int main()
   vector<void*> buffs { buff.data() };
 
   size_t num_acc_samps = 0; // total number of accumulated samples
+  size_t next_status_update = 0;
 
   ofstream file;
   file.open( "samples.csv" );
@@ -60,15 +61,21 @@ int main()
 
     num_acc_samps += num_rx_samps;
 
-    for ( auto& sample : buff ) {
+    for ( size_t i = 0; i < num_rx_samps; ++i ) {
+      const auto& sample = buff.at( i );
       file << sample.real() << "," << sample.imag() << "\n";
+    }
+
+    if ( num_acc_samps >= next_status_update ) {
+      cerr << "\rSamples received: " << num_acc_samps << "\033[K";
+      next_status_update = num_acc_samps + 1e5; // update every 100 ms
     }
   }
 
   rx_stream->issue_stream_cmd( uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS );
   file.close();
 
-  cout << "Done!\n";
+  cout << "\nDone!\n";
 
   return EXIT_SUCCESS;
 }
