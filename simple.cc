@@ -53,7 +53,7 @@ int main()
   cout << "Streaming..." << endl;
 
   while ( not stop_signal_called ) {
-    size_t num_rx_samps = rx_stream->recv( buffs, buff.size(), metadata, 5, true );
+    size_t num_rx_samps = rx_stream->recv( buffs, buff.size(), metadata );
 
     if ( metadata.error_code != uhd::rx_metadata_t::ERROR_CODE_NONE ) {
       throw runtime_error( metadata.strerror() );
